@@ -1,0 +1,200 @@
+SELECT location, date, total_cases, new_cases, total_deaths, population
+FROM `PortfolioProject.cov_dths`
+ORDER BY 1,2
+
+
+
+-- How many of those infected died in each day in the Netherlands
+
+SELECT location, date, total_cases, total_deaths, ROUND((total_deaths/total_cases)*100, 2) AS DeathsPercentage
+FROM `PortfolioProject.cov_dths`
+WHERE location LIKE '%Netherlands%'
+ORDER BY 1,2
+
+
+-- How many people got were infected as a percentage of the population in each day
+
+SELECT location, date, total_cases, population, ROUND((total_cases/population)*100, 2) AS PopulationPercentage
+FROM `PortfolioProject.cov_dths`
+WHERE location = 'Netherlands'
+ORDER BY 1,2
+
+
+-- Highest number of infections in percentage of the population per country at the time of latest measurement
+
+SELECT location, population, MAX(total_cases) AS HighestInfectionCount,  MAX(ROUND((total_cases/population)*100, 2)) AS PopulationPercentage
+FROM `PortfolioProject.cov_dths`
+GROUP BY location, population
+ORDER BY 4 DESC
+
+
+-- Showing highest death count as percentage of the population
+
+SELECT location, population, MAX(total_deaths) AS HighestDeathsCount,  MAX(ROUND((total_deaths/population)*100, 2)) AS PopulationPercentage
+FROM `PortfolioProject.cov_dths`
+WHERE location NOT LIKE '%income%'
+GROUP BY location, population
+ORDER BY 4 DESC
+
+
+-- Count how many individual locations are represented in the data set
+
+SELECT COUNT(DISTINCT location)  FROM 
+(SELECT location
+FROM `PortfolioProject.cov_dths`
+WHERE location NOT LIKE '%income%')
+
+
+-- Then I noticed that when location column has something other than a country, the continent column states NULL
+
+SELECT COUNT(DISTINCT location)  FROM 
+(SELECT location
+FROM `PortfolioProject.cov_dths`
+WHERE continent IS NOT NULL)
+
+
+-- Total number of deaths per country 
+SELECT location, MAX(total_deaths) AS HighestDeathsCount
+FROM `PortfolioProject.cov_dths`
+WHERE continent IS NOT NULL
+GROUP BY location
+ORDER BY 2 DESC
+
+-- We can also do this by continent
+SELECT continent, MAX(total_deaths) AS HighestDeathsCount
+FROM `PortfolioProject.cov_dths`
+WHERE continent IS NOT NULL
+GROUP BY continent
+ORDER BY 2 DESC
+
+-- But then let's see which countries are associated with which continent for Euruasia, to avoid confusion
+SELECT DISTINCT location, continent 
+FROM `PortfolioProject.cov_dths`
+WHERE continent IS NOT NULL
+AND (continent = 'Europe' OR continent = 'Asia')
+ORDER BY continent, location
+
+-- But NA only incudes USA, so the correct numbers per continent would be like this:
+SELECT location, MAX(total_deaths) AS HighestDeathsCount
+FROM `PortfolioProject.cov_dths`
+WHERE continent IS NULL
+AND location NOT LIKE '%income%'
+GROUP BY location
+ORDER BY 2 DESC
+
+-- And for the sake of completness, let's see the distribution per income level purely
+SELECT location, MAX(total_deaths) AS HighestDeathsCount
+FROM `PortfolioProject.cov_dths`
+WHERE continent IS NULL
+AND location LIKE '%income%'
+GROUP BY location
+ORDER BY 2 DESC
+
+
+
+-- Global Number of new deaths per day
+SELECT date, SUM(new_deaths) AS WorldDailyDeaths
+FROM `PortfolioProject.cov_dths`
+WHERE location LIKE '%World%'
+GROUP BY date
+ORDER BY 1 DESC
+
+-- Global Number of New Cases per day
+SELECT date, SUM(new_cases) AS WorldDailyCases
+FROM `PortfolioProject.cov_dths`
+WHERE location LIKE '%World%'
+GROUP BY date
+ORDER BY 1 DESC
+
+-- Combining all together:
+SELECT date, SUM(new_cases) AS WorldDailyCases, SUM(new_deaths) AS WorldDailyDeaths, ROUND(SUM(new_deaths)/SUM(new_cases) * 100, 2) AS DeathsPercentage
+FROM `PortfolioProject.cov_dths`
+WHERE location LIKE '%World%'
+AND new_cases IS NOT NULL
+AND new_cases != 0
+GROUP BY date
+ORDER BY 1 DESC
+
+
+
+-- Join 2 tables 
+SELECT *
+FROM `PortfolioProject.cov_dths` dths
+FULL JOIN `PortfolioProject.cov_vacc` vacc
+ON dths.location = vacc.location AND
+dths.date = vacc.date 
+
+
+-- People fully vaccinated (total) vs population
+SELECT dths.location, MAX(people_fully_vaccinated) AS VaccinationsNumber, MAX(ROUND((people_fully_vaccinated/dths.population) * 100, 2)) AS VaccinationPercentage
+FROM `PortfolioProject.cov_dths` dths
+FULL JOIN `PortfolioProject.cov_vacc` vacc
+ON dths.location = vacc.location AND
+dths.date = vacc.date 
+WHERE total_vaccinations IS NOT NULL
+AND dths.continent IS NOT NULL
+GROUP BY dths.location
+ORDER BY 1,2
+
+
+-- Let's see new vaccinations and how the total number of vaccinations grew each day in the NL and percentage of population vaccinated on a given day
+
+SELECT dths.location, dths.date, vacc.new_vaccinations AS VaccinationsNumber,  SUM(CAST(new_vaccinations AS int64)) OVER (PARTITION BY dths.location ORDER BY dths.location, dths.date) AS CumulativeVaccines, ROUND((CumulativeVaccines/dths.population) * 100, 2) AS VaccinationPercentage
+FROM `PortfolioProject.cov_dths` dths
+FULL JOIN `PortfolioProject.cov_vacc` vacc
+ON dths.location = vacc.location AND
+dths.date = vacc.date 
+WHERE dths.continent IS NOT NULL
+AND dths.location = 'Netherlands'
+ORDER BY 2 
+
+-- However it is not possible to use alias in a calculation (last column), so we need a workaround, which is CTE (WITH clause)
+WITH Vacc_Pop AS (SELECT
+dths.location, dths.date, dths.population, vacc.new_vaccinations AS VaccinationsNumber,  SUM(CAST(new_vaccinations AS int64)) OVER (PARTITION BY dths.location ORDER BY dths.location, dths.date) AS CumulativeVaccines,
+FROM `PortfolioProject.cov_dths` dths
+FULL JOIN `PortfolioProject.cov_vacc` vacc
+  ON dths.location = vacc.location AND
+  dths.date = vacc.date 
+WHERE dths.continent IS NOT NULL
+AND dths.location = 'Netherlands'
+ORDER BY 2
+)
+SELECT location, date, Vacc_Pop.VaccinationsNumber, Vacc_Pop.CumulativeVaccines, ROUND(CumulativeVaccines/population * 100, 2) AS PercentOfPopulation
+FROM Vacc_Pop
+
+
+-- Alternatively, create temp table
+DROP TABLE IF EXISTS Vaccinations
+CREATE TABLE PortfolioProject.Vaccinations (
+  Location string,
+  Date date,
+  Population numeric, 
+  VaccinationsNumber numeric,
+  CumulativeVaccines numeric,
+  PercentOfPopulation numeric
+)
+
+INSERT INTO PortfolioProject.Vaccinations
+SELECT
+dths.location, dths.date, dths.population, vacc.new_vaccinations AS VaccinationsNumber,  SUM(CAST(new_vaccinations AS int64)) OVER (PARTITION BY dths.location ORDER BY dths.location, dths.date) AS CumulativeVaccines,
+FROM `PortfolioProject.cov_dths` dths
+FULL JOIN `PortfolioProject.cov_vacc` vacc
+  ON dths.location = vacc.location AND
+  dths.date = vacc.date 
+WHERE dths.continent IS NOT NULL
+AND dths.location = 'Netherlands'
+ORDER BY 2
+
+SELECT Location, Date, Population, VaccinationsNumber, CumulativeVaccines, ROUND(CumulativeVaccines/Population * 100, 2) AS Percent
+FROM PortfolioProject.Vaccinations
+
+-- CREATING VIEW to store data for visualisations
+CREATE VIEW PortfolioProject.PopulationVaccinated AS
+SELECT dths.location, dths.date, dths.population, vacc.new_vaccinations AS VaccinationsNumber,  SUM(CAST(new_vaccinations AS int64)) OVER (PARTITION BY dths.location ORDER BY dths.location, dths.date) AS CumulativeVaccines,
+FROM `PortfolioProject.cov_dths` dths
+FULL JOIN `PortfolioProject.cov_vacc` vacc
+  ON dths.location = vacc.location AND
+  dths.date = vacc.date 
+WHERE dths.continent IS NOT NULL
+AND dths.location = 'Netherlands'
+ORDER BY 2 
